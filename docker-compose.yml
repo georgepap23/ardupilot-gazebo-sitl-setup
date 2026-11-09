@@ -1,0 +1,41 @@
+services:
+  sitl:
+    build:
+      context: ./ardupilot
+      dockerfile: Dockerfile
+      args:
+        DO_AP_STM_ENV: "0"        # SITL-only, skip STM32 toolchain
+        # NOTE: these read HOST_UID/HOST_GID, not UID/GID. zsh (macOS's
+        # default shell) treats UID/GID as special read-only parameters
+        # tied to the real process identity — `GID=1000 docker compose ...`
+        # fails with "failed to change group ID: operation not permitted"
+        # because zsh attempts an actual setgid(). Use HOST_UID/HOST_GID
+        # (via shell env or .env, see .env.example) instead.
+        USER_UID: "${HOST_UID:-501}"
+        # Do NOT default this to the host GID. On macOS the default primary
+        # group is "staff" = GID 20, which collides with Ubuntu's standard
+        # "dialout" group (also GID 20) — the Dockerfile's user-setup step
+        # renames whatever group already owns GID 20 to "ardupilot",
+        # deleting "dialout" before install-prereqs-ubuntu.sh tries to add
+        # the user to it, which crashes the build. UID match alone is
+        # sufficient for host file ownership on bind-mounted build artifacts
+        # (owner-UID permission bits apply regardless of group), so GID
+        # intentionally stays at the Dockerfile's safe default (1000, no
+        # standard-group collision).
+        USER_GID: "${HOST_GID:-1000}"
+    image: ardupilot-sitl:local
+    container_name: ardupilot-sitl
+    volumes:
+      - ./ardupilot:/ardupilot
+      - ./docker/sitl-entrypoint.sh:/usr/local/bin/sitl-entrypoint.sh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5760:5760/tcp"    # GCS (QGroundControl / MAVProxy) connects here
+      - "9003:9003/udp"    # Gazebo plugin -> SITL (FDM data in)
+      # 9002 intentionally NOT published: SITL -> host is outbound-only
+    environment:
+      - SIM_ADDRESS=host.docker.internal
+    command: ["bash", "/usr/local/bin/sitl-entrypoint.sh"]
+    stdin_open: true
+    tty: true
